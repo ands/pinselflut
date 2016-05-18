@@ -116,8 +116,19 @@ static void readSize()
 	fcntl(sockfd, F_SETFL, fcntl(sockfd, F_GETFL, 0) | O_NONBLOCK); // reenable non-blocking mode
 }
 
+static int idleCounter = 0;
+static void keepAlive()
+{
+	if (++idleCounter >= 60)
+	{
+		idleCounter = 0;
+		const char nl = '\n';
+		int n = write(sockfd, &nl, 1);
+	}
+}
+
 static unsigned char buffer[1024], *p = buffer;
-static void setPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+static void setPixel(int x, int y, struct nk_color color)
 {
 	if (x < 0 || y < 0 || x >= pixelsWidth || y >= pixelsHeight)
 		return;
@@ -147,6 +158,7 @@ static void setPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 		{
 			memmove(buffer, buffer + n, p - (buffer + n));
 			p -= n;
+			idleCounter = 0;
 		}
 	}
 
@@ -155,30 +167,62 @@ static void setPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 	p += itoa(x, p); *p++ = ' ';
 	p += itoa(y, p); *p++ = ' ';
 	const unsigned char hex[] = "0123456789abcdef";
-	*p++ = hex[r >> 4]; *p++ = hex[r & 0xf];
-	*p++ = hex[g >> 4]; *p++ = hex[g & 0xf];
-	*p++ = hex[b >> 4]; *p++ = hex[b & 0xf];
-	*p++ = hex[a >> 4]; *p++ = hex[a & 0xf];
+	*p++ = hex[color.r >> 4]; *p++ = hex[color.r & 0xf];
+	*p++ = hex[color.g >> 4]; *p++ = hex[color.g & 0xf];
+	*p++ = hex[color.b >> 4]; *p++ = hex[color.b & 0xf];
+	*p++ = hex[color.a >> 4]; *p++ = hex[color.a & 0xf];
 	*p++ = '\n';
 	
 	// set pixel locally
-	float alpha = a / 255.0f, nalpha = 1.0f - alpha;
+	float alpha = color.a / 255.0f, nalpha = 1.0f - alpha;
 	uint8_t *pixel = pixels + (y * pixelsWidth + x) * 3;
-	pixel[0] = (uint8_t)(pixel[0] * nalpha + r * alpha);
-	pixel[1] = (uint8_t)(pixel[1] * nalpha + g * alpha);
-	pixel[2] = (uint8_t)(pixel[2] * nalpha + b * alpha);
+	pixel[0] = (uint8_t)(pixel[0] * nalpha + color.r * alpha);
+	pixel[1] = (uint8_t)(pixel[1] * nalpha + color.g * alpha);
+	pixel[2] = (uint8_t)(pixel[2] * nalpha + color.b * alpha);
 }
 
-static void fillPoint(int x, int y, int size, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+struct
 {
-	float radius = size / 2.0f;
+	int x, y, w, h;
+	struct nk_color color;
+	int currentLine;
+} fillState = {0};
+static void fillRect(int x, int y, int w, int h, struct nk_color color)
+{
+	fillState.x = x; fillState.y = y; fillState.w = w; fillState.h = h;
+	fillState.color = color;
+	fillState.currentLine = 0;
+}
+static int fillUpdate()
+{
+	if (fillState.currentLine < fillState.h)
+	{
+		for (int x = 0; x < fillState.w; x++)
+			setPixel(fillState.x + x, fillState.y + fillState.currentLine, fillState.color);
+		fillState.currentLine++;
+		return 1;
+	}
+	return 0;
+}
+
+typedef struct
+{
+	char name[64];
+	struct nk_color color;
+	nk_size size;
+	nk_size stabilization;
+} brush_t;
+static void brushPoint(int x, int y, brush_t *brush)
+{
+	float radius = brush->size / 2.0f;
 	x -= (int)ceilf(radius);
 	y -= (int)ceilf(radius);
-	float a2 = powf(a / 255.0f, 1.0f / 5.0f);
-	for (int yi = 0; yi < size; yi++)
+	float a2 = powf(brush->color.a / 255.0f, 1.0f / 5.0f);
+	struct nk_color color = brush->color;
+	for (int yi = 0; yi < brush->size + 1; yi++)
 	{
 		float dy = abs(yi - radius);
-		for (int xi = 0; xi < size; xi++)
+		for (int xi = 0; xi < brush->size + 1; xi++)
 		{
 			float dx = abs(xi - radius);
 			float alpha = a2 * (1.0f - (sqrtf(dx * dx + dy * dy) / radius));
@@ -187,46 +231,26 @@ static void fillPoint(int x, int y, int size, uint8_t r, uint8_t g, uint8_t b, u
 				alpha = powf(alpha, 7.0f);
 				alpha *= 255.0f;
 				if (alpha >= 1.0f)
-					setPixel(x + xi, y + yi, r, g, b, (uint8_t)alpha);
+				{
+					color.a = (uint8_t)alpha;
+					setPixel(x + xi, y + yi, color);
+				}
 			}
 		}
 	}
 }
 
-struct
+static void brushLine(struct nk_vec2 p0, struct nk_vec2 p1, brush_t *brush)
 {
-	int x, y, w, h;
-	uint8_t r, g, b, a;
-	int currentLine;
-} fillState = {0};
-static void fillRect(int x, int y, int w, int h, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
-{
-	fillState.x = x; fillState.y = y; fillState.w = w; fillState.h = h;
-	fillState.r = r; fillState.g = g; fillState.b = b; fillState.a = a;
-	fillState.currentLine = 0;
-}
-static int fillUpdate()
-{
-	if (fillState.currentLine < fillState.h)
-	{
-		for (int x = 0; x < fillState.w; x++)
-			setPixel(fillState.x + x, fillState.y + fillState.currentLine,
-				fillState.r, fillState.g, fillState.b, fillState.a);
-		fillState.currentLine++;
-		return 1;
-	}
-	return 0;
-}
-
-static void drawLine(int x0, int y0, int x1, int y1, int radius, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
-{
+	int x0 = (int)roundf(p0.x), y0 = (int)roundf(p0.y);
+	int x1 = (int)roundf(p1.x), y1 = (int)roundf(p1.y);
 	int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
 	int dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1; 
 	int err = (dx > dy ? dx : -dy) / 2, e2;
 
 	for(;;)
 	{
-		fillPoint(x0, y0, radius, r, g, b, a); // TODO: optimize number of sent pixels!
+		brushPoint(x0, y0, brush); // TODO: optimize number of sent pixels!
 		if (x0 == x1 && y0 == y1)
 			break;
 		e2 = err;
@@ -284,28 +308,42 @@ int main(int argc, char **argv)
 	nk_glfw3_font_stash_begin(&atlas);
 	nk_glfw3_font_stash_end();
 
-	#define MAX_DRAW_BUFFER_SIZE 32
-	int x[MAX_DRAW_BUFFER_SIZE] = {0}, y[MAX_DRAW_BUFFER_SIZE] = {0};
-	nk_size drawBufferPos = 0, drawBufferSize = 8;
-	int lx = -1, ly = -1;
-	struct nk_color fg = nk_rgba(255, 255, 255, 255);
-	struct nk_color bg = nk_rgba(0, 0, 0, 255);
-	nk_size size = 7;
-	int idleCounter = 0;
+	struct
+	{
+		#define MAX_STABILIZATION 32
+		struct nk_vec2 positions[MAX_STABILIZATION];
+		nk_size writeIndex;
+		struct nk_vec2 lastAverage;
+	} stabilizer = {0};
+	stabilizer.lastAverage = nk_vec2(-1, -1);
+
+	#define MAX_BRUSHES 32
+	int brushCount = 2;
+	brush_t brushes[MAX_BRUSHES] = {0};
+
+	// default foreground brush
+	strcpy(brushes[0].name, "Pen");
+	brushes[0].color = nk_rgba(255, 255, 255, 255);
+	brushes[0].size = 7;
+	brushes[0].stabilization = 8;
+	brush_t *fg = &brushes[0];
+
+	// default background brush
+	strcpy(brushes[1].name, "Erase");
+	brushes[1].color = nk_rgba(0, 0, 0, 255);
+	brushes[1].size = 15;
+	brushes[1].stabilization = 1;
+	brush_t *bg = &brushes[1];
+
 	while (!glfwWindowShouldClose(window))
 	{
 		glfwPollEvents();
 		int w, h;
 		glfwGetFramebufferSize(window, &w, &h);
 		nk_glfw3_new_frame();
-		
-		if (++idleCounter >= 60)
-		{
-			idleCounter = 0;
-			const char nl = '\n';
-			int n = write(sockfd, &nl, 1); // keep alive
-		}
-		
+
+		keepAlive();
+
 		glBindTexture(GL_TEXTURE_2D, texture);
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, pixelsWidth, pixelsHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels);
 		struct nk_panel canvas;
@@ -314,50 +352,48 @@ int main(int argc, char **argv)
 			NK_WINDOW_MINIMIZABLE|NK_WINDOW_TITLE))
 		{
 			nk_layout_row_static(ctx, pixelsHeight, pixelsWidth, 1);
-			struct nk_vec2 p = nk_widget_position(ctx);
+			struct nk_vec2 canvasPosition = nk_widget_position(ctx);
 			nk_image(ctx, nk_image_id(texture));
 
+			// brush strokes and stabilization
 			if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS)
 			{
-				struct nk_color color = fg;
+				brush_t *brush = fg;
 				if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS)
-					color = bg;
-				
-				int nx = ctx->input.mouse.pos.x - p.x;
-				int ny = ctx->input.mouse.pos.y - p.y;
-				x[drawBufferPos] = nx; y[drawBufferPos] = ny;
-				if (++drawBufferPos >= drawBufferSize)
+					brush = bg;
+
+				stabilizer.positions[stabilizer.writeIndex] = nk_vec2(
+					ctx->input.mouse.pos.x - canvasPosition.x,
+					ctx->input.mouse.pos.y - canvasPosition.y);
+				if (++stabilizer.writeIndex >= brush->stabilization)
 				{
-					int avgx = 0, avgy = 0;
-					for (int i = 0; i < drawBufferSize; i++)
+					float sumx = 0, sumy = 0;
+					for (int i = 0; i < brush->stabilization; i++)
 					{
-						avgx += x[i];
-						avgy += y[i];
+						sumx += stabilizer.positions[i].x;
+						sumy += stabilizer.positions[i].y;
 					}
-					avgx /= drawBufferSize;
-					avgy /= drawBufferSize;
-					if (avgx >= 0 && avgy >= 0 && avgx < pixelsWidth && avgy < pixelsHeight)
+					struct nk_vec2 avg = nk_vec2(sumx / brush->stabilization, sumy / brush->stabilization);
+					if (avg.x >= 0 && avg.y >= 0 && avg.x <= pixelsWidth - 1 && avg.y <= pixelsHeight - 1)
 					{
-						if (lx == -1 && ly == -1) { lx = avgx; ly = avgy; }
-						if (avgx != lx || avgy != ly)
-							drawLine(lx, ly, avgx, avgy, size, color.r, color.g, color.b, color.a);
-						lx = avgx; ly = avgy;
+						if (stabilizer.lastAverage.x == -1 && stabilizer.lastAverage.y == -1)
+							stabilizer.lastAverage = avg;
+						if ((int)roundf(avg.x) != (int)roundf(stabilizer.lastAverage.x) ||
+							(int)roundf(avg.y) != (int)roundf(stabilizer.lastAverage.y))
+							brushLine(stabilizer.lastAverage, avg, brush);
+						stabilizer.lastAverage = avg;
 					}
 					
-					for (int i = 0; i < drawBufferSize - 1; i++)
-					{
-						x[i] = x[i + 1];
-						y[i] = y[i + 1];
-					}
-					drawBufferPos--;
-					
-					idleCounter = 0;
+					// make room for next mouse position in stabilizer buffer
+					for (int i = 0; i < stabilizer.writeIndex - 1; i++)
+						stabilizer.positions[i] = stabilizer.positions[i + 1];
+					stabilizer.writeIndex--;
 				}
 			}
 			else
 			{
-				drawBufferPos = 0;
-				lx = -1; ly = -1;
+				stabilizer.writeIndex = 0;
+				stabilizer.lastAverage = nk_vec2(-1, -1);
 			}
 		}
 		nk_end(ctx);
@@ -367,39 +403,104 @@ int main(int argc, char **argv)
 			NK_WINDOW_BORDER|NK_WINDOW_MOVABLE|NK_WINDOW_SCALABLE|
 			NK_WINDOW_MINIMIZABLE|NK_WINDOW_TITLE))
 		{
-			nk_layout_row_dynamic(ctx, 20, 1);
-			nk_label(ctx, "Brush Size:", NK_TEXT_LEFT);
-			nk_layout_row_dynamic(ctx, 30, 1);
-			nk_progress(ctx, &size, 50, 1);
+			const char *brushNames[MAX_BRUSHES];
+			int fgIndex = -1, bgIndex = -1;
+			for (int i = 0; i < brushCount; i++)
+			{
+				brushNames[i] = brushes[i].name;
+				if (brushes + i == fg) fgIndex = i;
+				if (brushes + i == bg) bgIndex = i;
+			}
 			
-			nk_layout_row_dynamic(ctx, 20, 1);
-			nk_label(ctx, "Stabilization:", NK_TEXT_LEFT);
-			nk_layout_row_dynamic(ctx, 30, 1);
-			nk_progress(ctx, &drawBufferSize, MAX_DRAW_BUFFER_SIZE - 1, 1);
-			if (drawBufferSize < 1)
-				drawBufferSize = 1;
-			if (drawBufferSize >= MAX_DRAW_BUFFER_SIZE)
-				drawBufferSize = MAX_DRAW_BUFFER_SIZE - 1;
+			nk_layout_row_dynamic(ctx, 15, 1);
+			nk_label(ctx, "Primary Brush:", NK_TEXT_LEFT);
+			nk_layout_row_dynamic(ctx, 25, 1);
+			fgIndex = nk_combo(ctx, brushNames, brushCount, fgIndex, 25);
 
-			nk_layout_row_dynamic(ctx, 20, 1);
-			nk_label(ctx, "Foreground Color:", NK_TEXT_LEFT);
-			nk_layout_row_dynamic(ctx, 120, 1);
-			fg = nk_color_picker(ctx, fg, NK_RGBA);
+			nk_layout_row_dynamic(ctx, 15, 1);
+			nk_label(ctx, "Secondary Brush:", NK_TEXT_LEFT);
+			nk_layout_row_dynamic(ctx, 25, 1);
+			bgIndex = nk_combo(ctx, brushNames, brushCount, bgIndex, 25);
 
-			nk_layout_row_dynamic(ctx, 20, 1);
-			nk_label(ctx, "Background Color:", NK_TEXT_LEFT);
-			nk_layout_row_dynamic(ctx, 120, 1);
-			bg = nk_color_picker(ctx, bg, NK_RGBA);
+			nk_layout_row_dynamic(ctx, 15, 1); // empty
+			nk_layout_row_dynamic(ctx, 15, 1);
+			nk_label(ctx, "Brush Editor:", NK_TEXT_LEFT);
+			int toDelete = -1;
+			for (int i = 0; i < brushCount; i++)
+			{
+				brush_t *brush = brushes + i;
+				if (nk_tree_push_id(ctx, NK_TREE_TAB, brush->name, NK_MINIMIZED, i))
+				{
+					nk_layout_row_dynamic(ctx, 25, 1);
+					int len = strlen(brush->name);
+					nk_edit_string(ctx, NK_EDIT_SIMPLE, brush->name, &len, sizeof(brush->name), nk_filter_default);
+					brush->name[len] = 0;
 
-			nk_layout_row_dynamic(ctx, 30, 1);
-			if (nk_button_label(ctx, "Foreground Fill", NK_BUTTON_DEFAULT))
-				fillRect(0, 0, pixelsWidth, pixelsHeight, fg.r, fg.g, fg.b, fg.a);
-			nk_layout_row_dynamic(ctx, 30, 1);
-			if (nk_button_label(ctx, "Background Fill", NK_BUTTON_DEFAULT))
-				fillRect(0, 0, pixelsWidth, pixelsHeight, bg.r, bg.g, bg.b, bg.a);
-			if (fillUpdate())
+					nk_layout_row_dynamic(ctx, 15, 1);
+					nk_label(ctx, "Brush Size:", NK_TEXT_LEFT);
+					nk_layout_row_dynamic(ctx, 20, 1);
+					nk_progress(ctx, &brush->size, 50, 1);
+					if (brush->size < 1)
+						brush->size = 1;
+
+					nk_layout_row_dynamic(ctx, 15, 1);
+					nk_label(ctx, "Stabilization:", NK_TEXT_LEFT);
+					nk_layout_row_dynamic(ctx, 20, 1);
+					nk_progress(ctx, &brush->stabilization, MAX_STABILIZATION - 1, 1);
+					if (brush->stabilization < 1)
+						brush->stabilization = 1;
+					if (brush->stabilization >= MAX_STABILIZATION)
+						brush->stabilization = MAX_STABILIZATION - 1;
+
+					nk_layout_row_dynamic(ctx, 120, 1);
+					brush->color = nk_color_picker(ctx, brush->color, NK_RGBA);
+
+					nk_layout_row_dynamic(ctx, 20, 1);
+					if (nk_button_label(ctx, "Fill Canvas", NK_BUTTON_DEFAULT))
+						fillRect(0, 0, pixelsWidth, pixelsHeight, brush->color);
+					
+					if (brushCount > 1)
+					{
+						nk_layout_row_dynamic(ctx, 20, 1);
+						if (nk_button_label(ctx, "Delete Brush", NK_BUTTON_DEFAULT))
+							toDelete = i;
+					}
+					
+					nk_tree_pop(ctx);
+				}
+			}
+
+			if (brushCount < MAX_BRUSHES)
 			{
 				nk_layout_row_dynamic(ctx, 20, 1);
+				if (nk_button_label(ctx, "Add Brush", NK_BUTTON_DEFAULT))
+				{
+					strcpy(brushes[brushCount].name, "New Brush");
+					brushes[brushCount].size = 1;
+					brushes[brushCount].stabilization = 1;
+					brushes[brushCount].color = nk_rgba(255, 255, 255, 255);
+					fgIndex = brushCount;
+					brushCount++;
+				}
+			}
+			
+			if (toDelete >= 0)
+			{
+				brushCount--;
+				for (int i = toDelete; i < brushCount; i++)
+					brushes[i] = brushes[i + 1];
+				if (fgIndex >= toDelete) fgIndex--;
+				if (fgIndex < 0) fgIndex = 0;
+				if (bgIndex >= toDelete) bgIndex--;
+				if (bgIndex < 0) bgIndex = 0;
+			}
+
+			fg = brushes + fgIndex;
+			bg = brushes + bgIndex;
+
+			if (fillUpdate())
+			{
+				nk_layout_row_dynamic(ctx, 15, 1);
 				nk_label(ctx, "Filling in progress", NK_TEXT_LEFT);
 			}
 		}

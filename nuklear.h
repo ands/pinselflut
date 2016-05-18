@@ -16673,7 +16673,7 @@ nk_tree_push_hashed(struct nk_context *ctx, enum nk_tree_type type,
     /* find or create tab persistent state (open/closed) */
     title_len = (int)nk_strlen(title);
     title_hash = nk_murmur_hash(title, (int)title_len, (nk_hash)type);
-    if (hash) title_hash += nk_murmur_hash(hash, len, (nk_hash)line);
+    if (hash) title_hash = nk_murmur_hash(hash, len, (nk_hash)line);
     state = nk_find_value(win, title_hash);
     if (!state) {
         state = nk_add_value(ctx, win, title_hash, 0);
