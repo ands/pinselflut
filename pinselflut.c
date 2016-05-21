@@ -1,4 +1,5 @@
 #define _DEFAULT_SOURCE 1
+#define _USE_MATH_DEFINES
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
