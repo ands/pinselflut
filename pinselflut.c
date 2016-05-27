@@ -220,7 +220,7 @@ static void brushPoint(int x, int y, brush_t *brush)
 	float radius = brush->size / 2.0f;
 	x -= (int)ceilf(radius);
 	y -= (int)ceilf(radius);
-	float a2 = powf(brush->color.a / 255.0f, 1.0f / 8.0f);
+	float a2 = powf(brush->color.a / 255.0f, 1.0f / 5.0f);
 	struct nk_color color = brush->color;
 	for (int yi = 0; yi < brush->size + 1; yi++)
 	{
