@@ -212,6 +212,7 @@ typedef struct
 	struct nk_color color;
 	nk_size size;
 	nk_size stabilization;
+	nk_size spray;
 } brush_t;
 static void brushPoint(int x, int y, brush_t *brush)
 {
@@ -225,16 +226,20 @@ static void brushPoint(int x, int y, brush_t *brush)
 		float dy = abs(yi - radius);
 		for (int xi = 0; xi < brush->size + 1; xi++)
 		{
-			float dx = abs(xi - radius);
-			float alpha = a2 * (1.0f - (sqrtf(dx * dx + dy * dy) / radius));
-			if (alpha > 0.0f)
+			if ((rand() % 100) % brush->spray == 0)
 			{
-				alpha = powf(alpha, 7.0f);
-				alpha *= 255.0f;
-				if (alpha >= 1.0f)
+				
+				float dx = abs(xi - radius);
+				float alpha = a2 * (1.0f - (sqrtf(dx * dx + dy * dy) / radius));
+				if (alpha > 0.0f)
 				{
-					color.a = (uint8_t)alpha;
-					setPixel(x + xi, y + yi, color);
+					alpha = powf(alpha, 7.0f);
+					alpha *= 255.0f;
+					if (alpha >= 1.0f)
+					{
+						color.a = (uint8_t)alpha;
+						setPixel(x + xi, y + yi, color);
+					}
 				}
 			}
 		}
@@ -272,6 +277,10 @@ int main(int argc, char **argv)
 		fprintf(stderr, "usage %s hostname port\n", argv[0]);
 		exit(0);
 	}
+
+	struct timeval T1;
+	srand(T1.tv_usec);
+
 	hostname = argv[1];
 	port = atoi(argv[2]);
 	flutConnect();
@@ -327,6 +336,7 @@ int main(int argc, char **argv)
 	brushes[0].color = nk_rgba(255, 255, 255, 255);
 	brushes[0].size = 7;
 	brushes[0].stabilization = 8;
+	brushes[0].spray = 1;
 	brush_t *fg = &brushes[0];
 
 	// default background brush
@@ -334,6 +344,7 @@ int main(int argc, char **argv)
 	brushes[1].color = nk_rgba(0, 0, 0, 255);
 	brushes[1].size = 15;
 	brushes[1].stabilization = 1;
+	brushes[1].spray = 1;
 	brush_t *bg = &brushes[1];
 
 	while (!glfwWindowShouldClose(window))
@@ -452,6 +463,15 @@ int main(int argc, char **argv)
 						brush->stabilization = 1;
 					if (brush->stabilization >= MAX_STABILIZATION)
 						brush->stabilization = MAX_STABILIZATION - 1;
+
+					nk_layout_row_dynamic(ctx, 15, 1);
+					nk_label(ctx, "Spray:", NK_TEXT_LEFT);
+					nk_layout_row_dynamic(ctx, 20, 1);
+					nk_progress(ctx, &brush->spray, 100, 1);
+					if (brush->spray < 1)
+						brush->spray = 1;
+					if (brush->spray >= 101)
+						brush->spray = 10;
 
 					nk_layout_row_dynamic(ctx, 120, 1);
 					brush->color = nk_color_picker(ctx, brush->color, NK_RGBA);
