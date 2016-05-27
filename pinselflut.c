@@ -228,7 +228,6 @@ static void brushPoint(int x, int y, brush_t *brush)
 		{
 			if ((rand() % 100) % brush->spray == 0)
 			{
-				
 				float dx = abs(xi - radius);
 				float alpha = a2 * (1.0f - (sqrtf(dx * dx + dy * dy) / radius));
 				if (alpha > 0.0f)
