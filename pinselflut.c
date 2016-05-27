@@ -213,13 +213,14 @@ typedef struct
 	nk_size size;
 	nk_size stabilization;
 	nk_size spray;
+	nk_size shape;
 } brush_t;
 static void brushPoint(int x, int y, brush_t *brush)
 {
 	float radius = brush->size / 2.0f;
 	x -= (int)ceilf(radius);
 	y -= (int)ceilf(radius);
-	float a2 = powf(brush->color.a / 255.0f, 1.0f / 5.0f);
+	float a2 = powf(brush->color.a / 255.0f, 1.0f / 8.0f);
 	struct nk_color color = brush->color;
 	for (int yi = 0; yi < brush->size + 1; yi++)
 	{
@@ -229,7 +230,7 @@ static void brushPoint(int x, int y, brush_t *brush)
 			if ((rand() % 100) % brush->spray == 0)
 			{
 				float dx = abs(xi - radius);
-				float alpha = a2 * (1.0f - (sqrtf(dx * dx + dy * dy) / radius));
+				float alpha = a2 * (1.0f - (sqrtf(dx * dx + dy * dy) / radius * (brush->shape/10.0)));
 				if (alpha > 0.0f)
 				{
 					alpha = powf(alpha, 7.0f);
@@ -336,6 +337,7 @@ int main(int argc, char **argv)
 	brushes[0].size = 7;
 	brushes[0].stabilization = 8;
 	brushes[0].spray = 1;
+	brushes[0].shape = 10;
 	brush_t *fg = &brushes[0];
 
 	// default background brush
@@ -344,6 +346,7 @@ int main(int argc, char **argv)
 	brushes[1].size = 15;
 	brushes[1].stabilization = 1;
 	brushes[1].spray = 1;
+	brushes[1].shape = 10;
 	brush_t *bg = &brushes[1];
 
 	while (!glfwWindowShouldClose(window))
@@ -471,6 +474,15 @@ int main(int argc, char **argv)
 						brush->spray = 1;
 					if (brush->spray >= 101)
 						brush->spray = 10;
+
+					nk_layout_row_dynamic(ctx, 15, 1);
+					nk_label(ctx, "Brush Shape:", NK_TEXT_LEFT);
+					nk_layout_row_dynamic(ctx, 20, 1);
+					nk_progress(ctx, &brush->shape, 10, 10);
+					if (brush->shape < 0)
+						brush->shape = 0;
+					if (brush->shape > 10)
+						brush->shape = 10;
 
 					nk_layout_row_dynamic(ctx, 120, 1);
 					brush->color = nk_color_picker(ctx, brush->color, NK_RGBA);
